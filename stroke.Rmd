@@ -9,7 +9,7 @@ output:
 
 ## Classifier for Stroke Prediction Data set
 
-First of all, we'll explore the data and identify the most relevant features to our prediction
+Explore the data and identifying the most relevant features to our prediction
 
 ```{r,echo=FALSE, warning=FALSE}
 

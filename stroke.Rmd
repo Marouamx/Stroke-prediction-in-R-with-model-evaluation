@@ -1,0 +1,321 @@
+---
+title: "Stroke Prediction"
+author: "Maroua"
+date: '2022-03-24'
+output:
+  word_document: default
+  pdf_document: default
+---
+
+## Classifier for Stroke Prediction Data set
+
+First of all, we'll explore the data and identify the most relevant features to our prediction
+
+```{r,echo=FALSE, warning=FALSE}
+
+rm(list = ls())
+library(tidyverse)
+library(data.table)
+library(fastDummies)
+library(grid)
+library(ggplot2)
+library(gridExtra)
+library(ModelMetrics)
+library(caret)
+set.seed(400)
+```
+
+## Load and display summary of data
+
+```{r, echo=TRUE}
+
+data <- read.csv(file = 'healthcare-dataset-stroke-data.csv')
+summary(data)
+```
+
+## Data cleaning
+
+ID is not relevant so it should be removed
+
+```{r, echo=TRUE}
+stroke = subset(data, select = -c(id))
+```
+
+BMI should be converted to numeric instead of characters and check fo NA in all data-set
+
+```{r , warning=FALSE}
+stroke$bmi <- as.numeric(as.character(stroke$bmi))
+colSums(is.na(stroke))
+```
+
+As we can see only the BMI that has annoying NA in it so they should be replaced by 0's or mean of BMI data
+
+```{r}
+stroke$bmi <- stroke$bmi %>% replace_na(median(stroke$bmi, na.rm = TRUE))
+```
+
+The gender feature has one 'Other' class, we will replace it by most frequent gender which is 'female'
+
+```{r}
+stroke$gender[stroke$gender == 'Other'] = 'Female'
+```
+
+Same thing with Smoking
+
+```{r}
+as.data.frame(table(stroke$smoking_status))
+
+
+```
+
+We can see that Unknown has a significantly large number but it does not give any information, so we need to replace it with the most frequent category 'never smoked'
+
+```{r}
+stroke <- stroke %>% mutate(smoking_status = replace(smoking_status, smoking_status == "Unknown", "never smoked"))
+
+```
+
+Now we can see that our data is clean
+
+```{r}
+colSums(is.na(stroke))
+
+```
+
+## Correlation and feature relevancy
+
+```{r}
+
+copie = copy(stroke)
+
+#Trensform all characters in features to binary 1/0 for coorealtion 
+
+copie$Residence_type[copie$Residence_type == "Urban"] <- 0
+copie$Residence_type[copie$Residence_type == "Rural"] <- 1
+copie$ever_married[copie$ever_married == "Yes"] <- 1
+copie$ever_married[copie$ever_married == "No"] <- 0
+copie$gender[copie$gender == "Male"] <- 0
+copie$gender[copie$gender == "Female"] <- 1
+
+
+copie$Residence_type <- as.numeric(as.character(copie$Residence_type))
+copie$ever_married <- as.numeric(as.character(copie$ever_married))
+copie$gender <- as.numeric(as.character(copie$gender))
+
+
+# Quantitative Variables: Correlation Map
+stroke.quant = subset(copie, select = -c(work_type, smoking_status))
+stroke.cor = round(cor(stroke.quant),2)
+ggplot(data = reshape2::melt(stroke.cor),aes(x=Var1, y=Var2, fill=value)) + geom_tile() +  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1,1), space = "Lab", name="Pearson\nCorrelation") + geom_text(aes(Var2, Var1, label = value), color = "black", size = 4) + theme(axis.text.x = element_text(angle = 30))
+
+```
+
+From this correlation map, it is very clear that age, hypertension, heart_disease all contribute with high rate so they'll be chosen as the 3 most relevant features.
+
+## Plotting Data
+
+Here we can see different distribution across discrete data
+
+```{r}
+
+p1 <-ggplot(data = stroke) +geom_bar(mapping = aes(x = work_type))
+p2 <-ggplot(data = stroke) +geom_bar(mapping = aes(x = Residence_type))
+p3 <-ggplot(data = stroke) +geom_bar(mapping = aes(x = smoking_status))
+p4 <-ggplot(data = stroke) +geom_bar(mapping = aes(x = stroke))
+grid.arrange(p1,p2,p3,p4, ncol= 2)
+
+```
+
+```{r}
+p1 <- ggplot(data = stroke) +geom_bar(mapping = aes(x = gender))
+p2 <-ggplot(data = stroke) +geom_bar(mapping = aes(x = hypertension))
+p3 <-ggplot(data = stroke) +geom_bar(mapping = aes(x = heart_disease)) 
+p4 <-ggplot(data = stroke) +geom_bar(mapping = aes(x = ever_married)) 
+grid.arrange(p1,p2,p3,p4, ncol= 2)
+```
+
+Below we ll plot continuous data
+
+```{r}
+c1 <- ggplot(data = stroke) + geom_histogram(mapping = aes(x = age), binwidth = 0.5, col = 'steelblue')
+c2 <- ggplot(data = stroke) + geom_histogram(mapping = aes(x = avg_glucose_level), binwidth = 0.5, col = 'steelblue')
+c3 <- ggplot(data = stroke) + geom_histogram(mapping = aes(x = bmi), binwidth = 0.5, col = 'steelblue')
+grid.arrange(c1,c2,c3, ncol= 2)
+```
+
+Here are different histograms for BMI, glucose level and age.
+
+## Fitting the GLM
+
+First we need our data to be binary for the glm model with some features extended, like smoking and work type because they have implicitly classes too (like we saw in correlation)
+
+```{r}
+stroke_dummy <- dummy_cols(stroke,select_columns = c("gender","work_type","smoking_status"),remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+stroke_dummy %>% head
+```
+
+```{r}
+sample <- sample(c(TRUE, FALSE), nrow(stroke_dummy), replace=TRUE, prob=c(0.7,0.3))
+training <- stroke_dummy[sample,]
+testing <- stroke_dummy[-sample,]
+
+model <- glm(stroke ~.,family=binomial(link='logit'), data=training)
+
+summary(model)
+
+```
+
+### Prediction for the GLM
+
+```{r, warning=FALSE}
+
+model.prob = predict(model, testing, type="response")
+predictions <- as.factor(as.numeric(model.prob>0.5))
+cm <- confusionMatrix((data = predictions), reference = as.factor(testing$stroke))
+
+show(cm)
+```
+
+### Accuracy and other metrics
+
+```{r}
+
+cm = as.matrix(table(Actual = testing$stroke, Predicted = predictions)) # create the confusion matrix
+show(cm)
+
+n = sum(cm) # number of instances
+
+nc = nrow(cm) # number of classes
+
+diagy = diag(cm) # number of correctly classified instances per class 
+
+rowsums = apply(cm, 1, sum) # number of instances per class
+
+colsums = apply(cm, 2, sum) # number of predictions per class
+ 
+p = rowsums / n # distribution of instances over the actual classes
+ 
+q = colsums / n # distribution of instances over the predicte
+```
+
+```{r}
+accuracy = sum(diagy) / n 
+cat("accuracy:\n")
+show(accuracy)
+
+
+precision = diagy / colsums
+cat("\n precision :\n")
+show(precision)
+
+recall = diagy / rowsums 
+cat("\nrecall :\n")
+show(recall)
+
+f1 = 2 * precision * recall / (precision + recall) 
+cat("\nf1 :\n")
+show(f1)
+
+```
+
+### Notes:
+
+Although the accuracy is really good, but the data is unbalanced -\> the model behaves good predicting negatives but really bad predicting positives.
+
+As it can be seen in the confession matrix 247 cases were classed wrong.
+
+One way to overcome this is to increase the number of samples for the (strokes = 1) which we cannot do here.
+
+Another method is called oversampling (it takes the minority class and duplicate random samples of it)
+
+and this will be applied at the end to try to improve the predictions.
+
+## Applying KNN (nearest neighbor)
+
+```{r, warning = FALSE}
+train_control <- trainControl(method = "cv", number = 5)
+knn <- train(stroke~., data = training, method = "knn", trControl = train_control)
+knn
+```
+
+It can be seen that he accuracy is pretty low for this model and we cant move on with it so we try to better predict with the first GLM.
+
+## Oversampling data
+
+```{r, warning=FALSE}
+
+library(ROSE)
+
+
+data_balanced_over <- ovun.sample(stroke ~ ., data = stroke, method = "over",N = 5500)$data
+
+stroke_dummy <- dummy_cols(data_balanced_over,select_columns = c("gender","work_type","smoking_status"),remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+
+sample <- sample(c(TRUE, FALSE), nrow(stroke_dummy), replace=TRUE, prob=c(0.7,0.3))
+training <- stroke_dummy[sample,]
+testing <- stroke_dummy[-sample,]
+
+model <- glm(stroke ~.,family=binomial(link='logit'), data=training)
+
+model.prob = predict(model, testing, type="response")
+predictions <- as.factor(as.numeric(model.prob>0.5))
+cm2 <- confusionMatrix((data = predictions), reference = as.factor(testing$stroke))
+
+show(cm2)
+```
+
+### Accuracy and other metrics
+
+```{r}
+
+cm = as.matrix(table(Actual = testing$stroke, Predicted = predictions)) # create the confusion matrix
+show(cm)
+
+n = sum(cm) # number of instances
+
+nc = nrow(cm) # number of classes
+
+diagy = diag(cm) # number of correctly classified instances per class 
+
+rowsums = apply(cm, 1, sum) # number of instances per class
+
+colsums = apply(cm, 2, sum) # number of predictions per class
+ 
+p = rowsums / n # distribution of instances over the actual classes
+ 
+q = colsums / n # distribution of instances over the predicte
+```
+
+```{r}
+accuracy = sum(diagy) / n 
+cat("accuracy:\n")
+show(accuracy)
+
+
+precision = diagy / colsums
+cat("\n precision :\n")
+show(precision)
+
+recall = diagy / rowsums 
+cat("\nrecall :\n")
+show(recall)
+
+f1 = 2 * precision * recall / (precision + recall) 
+cat("\nf1 :\n")
+show(f1)
+
+```
+
+## Comparison
+
+### Left: Before oversampling , Right: after oversampling
+
+![](images/paste-8814D318.png){width="164"}
+
+![](images/paste-BB95246F.png){width="169"}
+
+### ![](images/paste-A342C752.png)![](images/paste-3F23BC08.png)
+
+This clearly shows that after oversampling, Negative samples were better predicted thus prediction is improved.
+
+## 
